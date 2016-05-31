@@ -1,0 +1,3 @@
+= Simmstring
+
+Commandline utility that takes a list of strings and does fuzzy matching of those strings to a reference list of strings. The strings we want to match will be called source strings and the strings we match them to will be called target strings. For each source string it gives the top N matching target strings, according to some string simmilarity metric (Jaro-Winkler).
