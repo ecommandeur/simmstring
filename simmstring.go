@@ -2,15 +2,20 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/xrash/smetrics"
 )
 
-// TODO Refactor big hairy main - Apply boy scout rule
-// go run simmstring.go -source resources\test_strings.txt -target resources\ref_strings.txt
+// TODO Refactor big hairy main
+// TODO make it work for numcases > 1
+// Example
+// go run simmstring.go -source resources\test_strings.txt -target resources\ref_strings.txt -v
 func main() {
 	//
 	// Jaro Winkler parameters
@@ -24,7 +29,7 @@ func main() {
 	var src string
 	var tar string
 	var verbose bool
-	//nummatches := 3
+	nummatches := 1
 
 	flag.StringVar(&src, "source", "", "(Required) Path to file with source strings.")
 	flag.StringVar(&tar, "target", "", "(Required) Path to file with target strings.")
@@ -69,25 +74,60 @@ func main() {
 	defer source.Close()
 	sourceScanner := bufio.NewScanner(source)
 
-	bestMatches := [][]string{}
+	//bestMatches := [][]string{}
 	for sourceScanner.Scan() {
 		sourceStr := sourceScanner.Text()
-		bestMatchDist := 0.0
-		bestMatchStr := ""
+		//as long as we keep bbestMatches sorted we know lowerLim/upperLim match
+		//but we do not want to sort it each and every time
+		var bbestMatches []SimPair
+		//bestMatch stuff will be obsoleted by bbestMatch stuff
+		//bestMatchDist := 0.0
+		//bestMatchStr := ""
+		//lowerLimMatch
+		lowerLimDist := 1.0
+		//start loop target strings
 		for targetStr := range targetStrings {
 			dist := smetrics.JaroWinkler(sourceStr, targetStr, boostThreshold, prefixSize)
-			if dist > bestMatchDist {
-				bestMatchDist = dist
-				bestMatchStr = targetStr
+			if len(bbestMatches) < nummatches {
+				bbestMatches = append(bbestMatches, SimPair{sourceStr, targetStr, dist})
+				if dist < lowerLimDist {
+					lowerLimDist = dist
+				}
 			}
-			if verbose {
-				fmt.Print(sourceStr, " ", targetStr, " ", dist, "\n")
+			if len(bbestMatches) == nummatches {
+				// at this point there must be as many targets as nummatches
+				if dist > lowerLimDist {
+					// if nummatches = 1
+					//  set new match as lowerLimDist
+					// if nummatches > 1
+					//  sort bbestMatches
+					//  evict worst match
+					//  second worst match as lowerLimDist
+					if nummatches == 1 {
+						// TODO can we just set bbestMatches anew?
+						bbestMatches = []SimPair{SimPair{sourceStr, targetStr, dist}}
+						lowerLimDist = dist
+					}
+				}
 			}
+			//if dist > bestMatchDist {
+			//	bestMatchDist = dist
+			//	bestMatchStr = targetStr
+			//}
+			//if verbose {
+			//	fmt.Print(sourceStr, " ", targetStr, " ", dist, "\n")
+			//}
 		}
-		bestMatches = append(bestMatches, []string{sourceStr, bestMatchStr})
-		if verbose {
-			fmt.Print("best match ", bestMatchStr, "\n")
+		// end loop target strings
+		//print results to std out for each source str
+		for i := range bbestMatches {
+			out := bbestMatches[i]
+			fmt.Print(out.String())
 		}
+		//bestMatches = append(bestMatches, []string{sourceStr, bestMatchStr})
+		//if verbose {
+		//	fmt.Print("best match ", bestMatchStr, "\n")
+		//}
 	}
 
 	if err := sourceScanner.Err(); err != nil {
@@ -96,8 +136,9 @@ func main() {
 
 	/* test sorting of SimPair
 	var sp []*SimPair
-	sp = append(sp, &SimPair{Source: "a", Target: "b", Distance: 2.5})
+	sp = append(sp, &SimPair{Source: "a,a", Target: "b", Distance: 2.5})
 	sp = append(sp, &SimPair{Source: "a", Target: "c", Distance: 1.5})
+	fmt.Println(sp[0].String())
 	fmt.Println(sp)
 	sort.Sort(ByDistance(sp))
 	fmt.Println(sp)
@@ -107,9 +148,9 @@ func main() {
 	// TODO write out to a file
 	// or just rely on piping to output ... ?
 	// what is more efficient ?
-	for i := range bestMatches {
-		fmt.Print(bestMatches[i][0], ",", bestMatches[i][1], "\n")
-	}
+	//for i := range bestMatches {
+	//	fmt.Print(bestMatches[i][0], ",", bestMatches[i][1], "\n")
+	//}
 
 }
 
@@ -120,7 +161,16 @@ type SimPair struct {
 	Distance float64
 }
 
-func (s SimPair) String() string { return fmt.Sprintf("%s %s - %v", s.Source, s.Target, s.Distance) }
+// String writes SimPair as CSV string
+func (s SimPair) String() string {
+	record := []string{s.Source, s.Target, strconv.FormatFloat(s.Distance, 'f', -1, 64)}
+	var b bytes.Buffer
+	w := csv.NewWriter(&b)
+	w.Write(record)
+	w.Flush()
+	str := b.String()
+	return str
+}
 
 // ByDistance is for sorting SimPairs by distance
 type ByDistance []*SimPair
@@ -134,6 +184,7 @@ func (d ByDistance) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 // Less method of sort interface for ByDistance
 func (d ByDistance) Less(i, j int) bool { return d[i].Distance < d[j].Distance }
 
+// TODO it's a bit ugly that exit on error prints usage
 func exitOnError(e error, msg string) {
 	if e != nil {
 		fmt.Print(msg, "\n\n")
