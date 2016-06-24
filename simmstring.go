@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 
 	"github.com/xrash/smetrics"
@@ -24,16 +25,19 @@ func main() {
 	prefixSize := 4       // prefixSize = size of the initial prefix considered. This value was set to 4 in Winkler's papers.
 
 	//
+
+	//
 	// ARGUMENTS
 	//
 	var src string
 	var tar string
 	var verbose bool
-	nummatches := 1
+	var nummatches int
 
 	flag.StringVar(&src, "source", "", "(Required) Path to file with source strings.")
 	flag.StringVar(&tar, "target", "", "(Required) Path to file with target strings.")
 	flag.BoolVar(&verbose, "v", false, "(Optional) Verbose mode.")
+	flag.IntVar(&nummatches, "n", 1, "(Optional) Number of matches.")
 
 	flag.Parse()
 
@@ -44,10 +48,10 @@ func main() {
 
 	//Read source strings from a file
 	source, err := os.Open(src)
-	exitOnError(err, "Oops cannot find source")
+	exitOnError(err, "Oops cannot find source "+src)
 
 	target, err := os.Open(tar)
-	exitOnError(err, "Oops cannot find target")
+	exitOnError(err, "Oops cannot find target "+tar)
 
 	defer target.Close()
 	targetScanner := bufio.NewScanner(target)
@@ -67,9 +71,8 @@ func main() {
 		targetStrings[targetStr] = true
 	}
 
-	if err := targetScanner.Err(); err != nil {
-		// TODO do sth with error
-	}
+	err = targetScanner.Err()
+	exitOnError(err, "Error reading target "+tar)
 
 	defer source.Close()
 	sourceScanner := bufio.NewScanner(source)
@@ -79,7 +82,7 @@ func main() {
 		sourceStr := sourceScanner.Text()
 		//as long as we keep bbestMatches sorted we know lowerLim/upperLim match
 		//but we do not want to sort it each and every time
-		var bbestMatches []SimPair
+		var bbestMatches []*SimPair
 		//bestMatch stuff will be obsoleted by bbestMatch stuff
 		//bestMatchDist := 0.0
 		//bestMatchStr := ""
@@ -88,26 +91,39 @@ func main() {
 		//start loop target strings
 		for targetStr := range targetStrings {
 			dist := smetrics.JaroWinkler(sourceStr, targetStr, boostThreshold, prefixSize)
-			if len(bbestMatches) < nummatches {
-				bbestMatches = append(bbestMatches, SimPair{sourceStr, targetStr, dist})
-				if dist < lowerLimDist {
-					lowerLimDist = dist
-				}
-			}
 			if len(bbestMatches) == nummatches {
 				// at this point there must be as many targets as nummatches
 				if dist > lowerLimDist {
-					// if nummatches = 1
+					// at this point we know that match is better than worst one we kept
+					// if nummatches eq 1
+					//  keep new match as best match
 					//  set new match as lowerLimDist
-					// if nummatches > 1
+					// if nummatches gt 1
+					//  add new match to best matches
 					//  sort bbestMatches
 					//  evict worst match
-					//  second worst match as lowerLimDist
+					//  set second worst match as lowerLimDist
 					if nummatches == 1 {
 						// TODO can we just set bbestMatches anew?
-						bbestMatches = []SimPair{SimPair{sourceStr, targetStr, dist}}
+						bbestMatches = []*SimPair{&SimPair{sourceStr, targetStr, dist}}
 						lowerLimDist = dist
 					}
+					if nummatches > 1 {
+						bbestMatches = append(bbestMatches, &SimPair{sourceStr, targetStr, dist})
+						sort.Sort(ByDistance(bbestMatches))
+						//fmt.Println(bbestMatches)
+						bbestMatches = bbestMatches[1:]
+						//fmt.Println(bbestMatches)
+						lowerLimDist = bbestMatches[0].Distance
+					}
+				}
+			}
+			//As long as the number of pairs we have is less than the number of best matches
+			//we can just append the match
+			if len(bbestMatches) < nummatches {
+				bbestMatches = append(bbestMatches, &SimPair{sourceStr, targetStr, dist})
+				if dist < lowerLimDist {
+					lowerLimDist = dist
 				}
 			}
 			//if dist > bestMatchDist {
@@ -120,6 +136,7 @@ func main() {
 		}
 		// end loop target strings
 		//print results to std out for each source str
+		sort.Sort(ByDistance(bbestMatches))
 		for i := range bbestMatches {
 			out := bbestMatches[i]
 			fmt.Print(out.String())
@@ -130,11 +147,10 @@ func main() {
 		//}
 	}
 
-	if err := sourceScanner.Err(); err != nil {
-		// TODO do sth with error
-	}
+	err = sourceScanner.Err()
+	exitOnError(err, "")
 
-	/* test sorting of SimPair
+	/* test sorting of SimPair - sorts ascending
 	var sp []*SimPair
 	sp = append(sp, &SimPair{Source: "a,a", Target: "b", Distance: 2.5})
 	sp = append(sp, &SimPair{Source: "a", Target: "c", Distance: 1.5})
@@ -184,11 +200,10 @@ func (d ByDistance) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 // Less method of sort interface for ByDistance
 func (d ByDistance) Less(i, j int) bool { return d[i].Distance < d[j].Distance }
 
-// TODO it's a bit ugly that exit on error prints usage
+// exitOnError exits with an error message if error is not nil
 func exitOnError(e error, msg string) {
 	if e != nil {
-		fmt.Print(msg, "\n\n")
-		printUsage()
+		fmt.Println(msg)
 		os.Exit(1)
 	}
 }
@@ -201,5 +216,5 @@ func printUsage() {
 	flag.PrintDefaults()
 	println("")
 	println("Examples:")
-	println("  simmstring -source resoures\\test_strings.txt -target resources\\ref_strings.txt")
+	println("  simmstring -source resources\\test_strings.txt -target resources\\ref_strings.txt")
 }
